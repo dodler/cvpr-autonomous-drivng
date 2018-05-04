@@ -34,13 +34,11 @@ class VisdomValueWatcher(object):
 
     def display_every_iter(self, iter_num, X, gt, prediction, base_label):
         if iter_num % 10 == 0:
-            img = X.data.squeeze(0).cpu().numpy()[0]
-            #                img = np.transpose(img, axes=[1, 2, 0])
-            mask = gt.data.squeeze(0).cpu().numpy()[0]
-            pred = (prediction > 0.6).float().data.squeeze(0).cpu().numpy()[0]
-            #                Q = dense_crf(((img*255).round()).astype(np.uint8), pred)
 
-            # yy = dense_crf(np.array(prediction).astype(np.uint8), y)
+            img = X.data.squeeze(0).cpu().numpy()[0]
+            mask = gt.data.float().squeeze().cpu().numpy()[0]
+            pred = (prediction > 0.6).float().data.cpu().numpy()[0]
+            print(pred.shape, img.shape, mask.shape)
 
             if self.vis_img is None:
                 vis.image(img, opts=dict(title='source image'))

@@ -27,7 +27,7 @@ from config import VAL_EPOCH_BCE
 from config import VAL_EPOCH_DICE
 from config import gpu_id
 from models import LinkNet34
-from unet import UNet
+from models import UNet11
 from utils.loss import dice_coeff
 from utils.abstract import DualCompose
 from utils.abstract import ImageOnly
@@ -36,10 +36,12 @@ from utils.dualcrop import DualRotatePadded
 from utils.metrics import image_iou
 from utils.util_transform import DualResize, DualToTensor
 from visualization.watchers import VisdomValueWatcher
-
+from loss import LossMulti
 from utils.dataset import CvprSegmentationDataset
 
 watch = VisdomValueWatcher()
+
+NUM_CLASSES = 36
 
 print(gpu_id)
 print(IMAGES)
@@ -48,7 +50,7 @@ rgb_mean = (0.4914, 0.4822, 0.4465)
 rgb_std = (0.2023, 0.1994, 0.2010)
 
 train_transform = DualCompose([
-    # DualResize((RESIZE_TO, RESIZE_TO)),
+    DualResize((RESIZE_TO, RESIZE_TO)),
     DualRotatePadded(30),
     DualToTensor(),
     ImageOnly(Normalize(rgb_mean, rgb_std))])
@@ -63,7 +65,7 @@ test_transform = DualCompose([
 
 dataset = CvprSegmentationDataset(IMAGES, MASKS, 'train',
                                   train_transform, test_transform)
-loader = DataLoader(dataset, batch_size=BATCH_SIZE, num_workers=4)
+loader = DataLoader(dataset, batch_size=BATCH_SIZE, num_workers=1)
 
 train_len = len(dataset)
 dataset.set_mode('val')
@@ -105,6 +107,32 @@ def eval_net(net, dataset, gpu=False):
     return tot / float(i), loss / float(i)
 
 
+def make_one_hot(labels, C=NUM_CLASSES):
+    print(labels.size())
+    '''
+    Converts an integer label torch.autograd.Variable to a one-hot Variable.
+
+    Parameters
+    ----------
+    labels : torch.autograd.Variable of torch.cuda.LongTensor
+        N x 1 x H x W, where N is batch size.
+        Each value is an integer representing correct classification.
+    C : integer.
+        number of classes in labels.
+
+    Returns
+    -------
+    target : torch.autograd.Variable of torch.cuda.FloatTensor
+        N x C x H x W, where C is class number. One-hot encoded.
+    '''
+    one_hot = torch.FloatTensor(labels.size(0), C, labels.size(2), labels.size(3)).zero_()
+    target = one_hot.scatter_(1, labels.data, 1)
+
+    target = Variable(target)
+
+    return target
+
+
 def train_net(net, epochs=5, batch_size=8, lr=0.1, cp=True, gpu=True):
     print('''
     Starting training:
@@ -119,6 +147,7 @@ def train_net(net, epochs=5, batch_size=8, lr=0.1, cp=True, gpu=True):
 
     optimizer = optim.SGD(net.parameters(),
                           lr=lr, momentum=0.9, weight_decay=0.0005)
+    # criterion = LossMulti(num_classes=NUM_CLASSES, jaccard_weight=1)
     criterion = nn.CrossEntropyLoss().cuda()
     scheduler = ReduceLROnPlateau(optimizer, 'min')
     for epoch_num in range(epochs):
@@ -132,22 +161,26 @@ def train_net(net, epochs=5, batch_size=8, lr=0.1, cp=True, gpu=True):
             y = b[1]
 
             if gpu and torch.cuda.is_available():
-                X = Variable(X).cuda()
+                X = Variable(X.float()).cuda()
                 y = Variable(y).cuda()
             else:
                 X = Variable(X)
-                y = Variable(y)
+                # y = Variable(y)
 
             probs = net(X)
+            print(X.size(), y.size(), probs.size())
             probs_flat = probs.view(-1)
             y_flat = y.view(-1)
 
             watch.display_every_iter(i, X, y, probs, watch.get_vis())
 
-            loss = criterion(probs_flat, y_flat.float())
-            epoch_loss += loss.cpu().data[0]
+            loss = criterion(probs, y)
+            # epoch_loss += loss.cpu().data[0]
 
-            dice = dice_coeff(probs_flat, y.float()).data[0]
+            print(probs_flat.size(), y.size())
+
+            # dice = dice_coeff(probs_flat.squeeze(), y_flat.float().squeeze()).data[0]
+            dice = 0
             iou_m = image_iou(probs, y, NUM_CLASSES)
 
             watch.add_value(PER_ITER_IOU, iou_m)
@@ -187,9 +220,9 @@ def train_net(net, epochs=5, batch_size=8, lr=0.1, cp=True, gpu=True):
 
 
 if __name__ == '__main__':
-    parser = OptionParser()
-    net = UNet(3, 1).cuda()
-    # net = LinkNet34().cuda()
+    print(NUM_CLASSES)
+    net = UNet11(NUM_CLASSES).cuda()
+    # net = LinkNet34(NUM_CLASSES).cuda()
     cudnn.benchmark = True
 
     if os.path.exists(RESTORE_INTERRUPTED) and RESTORE_INTERRUPTED is not None:
