@@ -14,3 +14,9 @@ def image_iou(predict_mask, mask, classes):
             continue
         IOU.append(intersection / union)
     return np.mean(np.array(IOU))
+
+
+def image_iou(gt, pred):
+    intersection = ((gt == 1) & (pred == 1)).sum()
+    union = ((gt == 1) | (pred == 1)).sum()
+    return intersection / (1e-5 + union)

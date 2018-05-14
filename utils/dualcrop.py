@@ -4,6 +4,7 @@ import random
 import cv2
 from PIL import Image
 
+from config import RESIZE_TO
 from utils.abstract import DualTransformer
 
 
@@ -100,3 +101,11 @@ class DualToPIL(DualTransformer):
             return Image.fromarray(img[:, :, ::-1])
         else:
             return Image.fromarray(img)
+
+
+class DualCrop(DualTransformer):
+
+    def __call__(self, img, msk):
+        x = random.randint(0, img.shape[0] - RESIZE_TO)
+        y = random.randint(0, img.shape[1] - RESIZE_TO)
+        return img[x:x + RESIZE_TO, y:y + RESIZE_TO, :], msk[x:x + RESIZE_TO, y:y + RESIZE_TO],

@@ -1,47 +1,38 @@
-import sys
-from optparse import OptionParser
-
 import os
-import os.path as osp
+import sys
 
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import optim
 from torch.autograd import Variable
 from torch.backends import cudnn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
-import torch.nn.functional as F
 from torchvision.transforms import Normalize
 from tqdm import *
 
 from config import BATCH_SIZE, LEARNING_RATE, RESTORE_INTERRUPTED, NUM_CLASSES, MASKS
 from config import CHECKPOINT_DIR
-from config import IMAGES
 from config import EPOCH_NUM
+from config import IMAGES
 from config import PER_EPOCH_LOSS
-from config import PER_ITER_DICE
 from config import PER_ITER_IOU
 from config import PER_ITER_LOSS
 from config import RESIZE_TO
 from config import VAL_EPOCH_BCE
-from config import VAL_EPOCH_DICE
 from config import gpu_id
-from models import LinkNet34
 from models import UNet11
-from utils.loss import dice_coeff
 from utils.abstract import DualCompose
 from utils.abstract import ImageOnly
+from utils.dataset import CvprSegmentationDataset
 from utils.dualcolor import *
-from utils.dualcrop import DualRotatePadded
+from utils.dualcrop import DualRotatePadded, DualCrop
+from utils.loss import dice_coeff
 from utils.metrics import image_iou
 from utils.util_transform import DualResize, DualToTensor
 from visualization.watchers import VisdomValueWatcher
-from loss import LossMulti
-from utils.dataset import CvprSegmentationDataset
 
 watch = VisdomValueWatcher()
-
-NUM_CLASSES = 36
 
 print(gpu_id)
 print(IMAGES)
@@ -50,7 +41,8 @@ rgb_mean = (0.4914, 0.4822, 0.4465)
 rgb_std = (0.2023, 0.1994, 0.2010)
 
 train_transform = DualCompose([
-    DualResize((RESIZE_TO, RESIZE_TO)),
+    # DualResize((RESIZE_TO, RESIZE_TO)),
+    DualCrop(),
     DualRotatePadded(30),
     DualToTensor(),
     ImageOnly(Normalize(rgb_mean, rgb_std))])
@@ -145,10 +137,9 @@ def train_net(net, epochs=5, batch_size=8, lr=0.1, cp=True, gpu=True):
         CUDA: {}
     '''.format(epochs, batch_size, lr, train_len, val_len, str(cp), str(gpu)))
 
-    optimizer = optim.SGD(net.parameters(),
-                          lr=lr, momentum=0.9, weight_decay=0.0005)
-    # criterion = LossMulti(num_classes=NUM_CLASSES, jaccard_weight=1)
+    optimizer = optim.Adam(net.parameters())
     criterion = nn.CrossEntropyLoss().cuda()
+
     scheduler = ReduceLROnPlateau(optimizer, 'min')
     for epoch_num in range(epochs):
         print('Starting epoch {}/{}.'.format(epoch_num + 1, epochs))
@@ -156,39 +147,26 @@ def train_net(net, epochs=5, batch_size=8, lr=0.1, cp=True, gpu=True):
         epoch_loss = 0
         dataset.set_mode('train')
         for i, b in tqdm(enumerate(loader)):
+            X = b[0].cuda()
+            y = b[1].cuda()
+            y.requires_grad = False
 
-            X = b[0]
-            y = b[1]
-
-            if gpu and torch.cuda.is_available():
-                X = Variable(X.float()).cuda()
-                y = Variable(y).cuda()
-            else:
-                X = Variable(X)
-                # y = Variable(y)
-
-            probs = net(X)
-            print(X.size(), y.size(), probs.size())
-            probs_flat = probs.view(-1)
-            y_flat = y.view(-1)
+            probs = F.sigmoid(net(X))
+            print(probs.size(), y.size())
+            print(probs)
+            print(y)
+            loss = criterion(probs.float(), y)
 
             watch.display_every_iter(i, X, y, probs, watch.get_vis())
 
-            loss = criterion(probs, y)
-            # epoch_loss += loss.cpu().data[0]
+            epoch_loss += loss.cpu().item()
 
-            print(probs_flat.size(), y.size())
-
-            # dice = dice_coeff(probs_flat.squeeze(), y_flat.float().squeeze()).data[0]
-            dice = 0
-            iou_m = image_iou(probs, y, NUM_CLASSES)
+            iou_m = image_iou(y, probs)
 
             watch.add_value(PER_ITER_IOU, iou_m)
             watch.output(PER_ITER_IOU)
-            watch.add_value(PER_ITER_LOSS, loss.cpu().data[0])
+            watch.add_value(PER_ITER_LOSS, loss.cpu().item())
             watch.output(PER_ITER_LOSS)
-            watch.add_value(PER_ITER_DICE, dice)
-            watch.output(PER_ITER_DICE)
 
             optimizer.zero_grad()
 
@@ -202,9 +180,7 @@ def train_net(net, epochs=5, batch_size=8, lr=0.1, cp=True, gpu=True):
         dataset.set_mode('val')
         net.eval()
         val_dice, val_bce = eval_net(net, dataset, gpu)
-        watch.add_value(VAL_EPOCH_DICE, val_dice)
         watch.add_value(VAL_EPOCH_BCE, val_bce)
-        watch.output(VAL_EPOCH_DICE)
         watch.output(VAL_EPOCH_BCE)
 
         scheduler.step(val_bce)
@@ -221,13 +197,13 @@ def train_net(net, epochs=5, batch_size=8, lr=0.1, cp=True, gpu=True):
 
 if __name__ == '__main__':
     print(NUM_CLASSES)
-    net = UNet11(NUM_CLASSES).cuda()
+    net = UNet11(NUM_CLASSES).cuda().double()
     # net = LinkNet34(NUM_CLASSES).cuda()
     cudnn.benchmark = True
 
-    if os.path.exists(RESTORE_INTERRUPTED) and RESTORE_INTERRUPTED is not None:
-        net.load_state_dict(torch.load(RESTORE_INTERRUPTED))
-        print('Model loaded from {}'.format('interrupted.pth'))
+    # if os.path.exists(RESTORE_INTERRUPTED) and RESTORE_INTERRUPTED is not None:
+    #     net.load_state_dict(torch.load(RESTORE_INTERRUPTED))
+    #     print('Model loaded from {}'.format('interrupted.pth'))
     try:
         train_net(net, EPOCH_NUM, BATCH_SIZE, LEARNING_RATE,
                   gpu=True)

@@ -1,5 +1,6 @@
 import visdom
 import numpy as np
+from config import NUM_CLASSES
 
 vis = visdom.Visdom()
 
@@ -32,13 +33,27 @@ class VisdomValueWatcher(object):
         self.vis_gt = None
         self.vis_pred = None
 
+    def colorify(self, mask):
+        '''
+        :param mask: w x h x c
+        :return:
+        '''
+        res = np.zeros((1, mask.shape[1], mask.shape[2]))
+        for i in range(NUM_CLASSES - 1):
+            res[0, np.where(mask[i, :, :] == 1)] = i
+
+        return res.astype(np.float)
+
     def display_every_iter(self, iter_num, X, gt, prediction, base_label):
         if iter_num % 10 == 0:
 
             img = X.data.squeeze(0).cpu().numpy()[0]
             mask = gt.data.float().squeeze().cpu().numpy()[0]
             pred = (prediction > 0.6).float().data.cpu().numpy()[0]
-            print(pred.shape, img.shape, mask.shape)
+
+            print(img)
+            print(mask)
+            print(pred)
 
             if self.vis_img is None:
                 vis.image(img, opts=dict(title='source image'))
@@ -50,7 +65,7 @@ class VisdomValueWatcher(object):
             else:
                 self._vis.image(img, opts=dict(title='gt'), win=self.vis_gt)
 
-            if self.vis_gt is None:
+            if self.vis_pred is None:
                 self.vis_pred = self._vis.image(pred, opts=dict(title='prediction'))
             else:
                 self._vis.image(img, opts=dict(title='prediction'), win=self.vis_pred)

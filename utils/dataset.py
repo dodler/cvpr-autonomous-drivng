@@ -1,15 +1,16 @@
+import json
 import os
 import os.path as osp
-import json
+
+import random
 import cv2
+import numpy as np
+from skimage.io import imread
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
-import numpy as np
-
-import torch
-from torch.autograd import Variable
 
 from config import NUM_CLASSES
+from config import RESIZE_TO
 
 
 class CvprSegmentationDataset(Dataset):
@@ -46,17 +47,28 @@ class CvprSegmentationDataset(Dataset):
         else:
             return len(self.test)
 
-    def binarize_one_hot(self, m):
-        res = m.copy()
-        print(res.shape)
-        for label in self.labels2pixels.keys():
-            res[res == label] = self.labels2pixels[label]
+    def crop(self, img):
+        x = random.randint(0, img.shape[0] - RESIZE_TO)
+        y = random.randint(0, img.shape[1] - RESIZE_TO)
+        return img[x:x + RESIZE_TO, y:y + RESIZE_TO, :]
 
-        print(np.unique(res))
-        return res
-        # t = np.transpose(np.eye(255)[res], (1, 2, 0))
-        # print(t.shape)
-        # return t[0:35, :, :]
+    def bin(self, m):
+        t = m.copy() // 1000
+        res = np.zeros((m.shape[0], m.shape[1], NUM_CLASSES))
+        for label in self.labels2pixels.keys():
+            pix = self.labels2pixels[label]
+            t[t == label] = pix
+            where = np.where(t == pix)
+            res[where[0], where[1], pix] = 1
+
+        return self.crop(res)
+
+    def bin(self, m, target):
+        t = m.copy() // 1000
+        t[t == target] = 1
+        t[t != target] = 0
+
+        return t
 
     def __getitem__(self, item):
         if self.mode == 'train':
@@ -68,7 +80,6 @@ class CvprSegmentationDataset(Dataset):
             mask_path = osp.join(self.mask_path, self.test_mask[item])
             tr = self.test_transform
 
-        im = cv2.imread(path)
-        m = self.binarize_one_hot(cv2.imread(mask_path))
-        m = m.reshape((m.shape[0], m.shape[1], 1))
+        im = self.crop(cv2.imread(path))
+        m = self.bin(imread(mask_path), target=33)
         return tr(im, m)
